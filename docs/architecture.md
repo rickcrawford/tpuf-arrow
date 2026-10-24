@@ -64,7 +64,7 @@ Datetimes come back as text because that's what the API returns. Parsing them in
 
 ## Concurrency
 
-An unpinned turbopuffer namespace runs 16 queries at once. BM25 and ANN queries take one slot, kNN takes 2, and aggregations take 4. The 17th query waits up to 800 ms and then gets a 429 ([limits](https://turbopuffer.com/docs/limits)). The client holds a semaphore with `max_concurrency` permits (8 by default) around every request, across all threads. A count takes 4 permits at once, behind a lock, so two counts can't each grab half of what they need and wait on each other forever.
+An unpinned turbopuffer namespace runs 16 queries at once. BM25 and ANN queries take one slot, kNN takes 2, and aggregations take 4. The 17th query waits up to 800 ms and then gets a 429 ([limits](https://turbopuffer.com/docs/limits)). The client holds a semaphore with `max_concurrency` permits (8 by default) around every request, across all threads. A count takes 4 permits at once, and a multi-query one per query, behind a lock, so two of them can't each grab half of what they need and wait on each other forever.
 
 The semaphore is shared because each UDF call starts its own thread pool, and so does each `upsert`. If DuckDB runs calls on more than one thread, or your own code calls the client from several threads, a per-call limit would let the total climb well past 16. The SDK retries 429 and 5xx responses with backoff, 6 times here (the SDK default is 4).
 
@@ -85,6 +85,8 @@ There's one row per request, never one per hit. If you copy a query's cost onto 
 | `tp.scan(ns, limit=n)` | a smaller `top_k` on the last page | turbopuffer |
 | `WHERE` or `SELECT cols` on a registered reader | nothing; every page is fetched first | DuckDB |
 | `tp.count(ns, filters=f)` | `aggregate_by Count` | turbopuffer |
+| `tp.multi_query(ns, [q1, q2], rerank_by=("RRF", {}))` | one `multi_query` request, fused on the server | turbopuffer |
+| `tp.query(ns, r, rerank_by=model)` | `rerank_by` with a hosted model | turbopuffer runs the model |
 | `tpuf_bm25(ns, attr, q, k, f)` | `rank_by [attr, "BM25", q]`, `top_k k`, `filters f` | turbopuffer |
 | `tpuf_ann(ns, attr, q, k, f)` | `rank_by [attr, "ANN", ["Embed", q]]` | turbopuffer embeds `q`, then searches |
 | joins, `GROUP BY`, window functions over hits | nothing | DuckDB |
@@ -121,6 +123,5 @@ Questions I'd want answered before starting one:
 
 ## Not built yet
 
-- A hybrid search helper. `tp.tpuf.namespace(ns).multi_query(...)` works today, but its results aren't converted to Arrow or logged.
-- Reranking (`rerank_by`) through the UDF.
+- Hybrid search and reranking from SQL. `multi_query` and `rerank_by` work from Python, but the SQL functions only run single queries.
 - Parallel scans.

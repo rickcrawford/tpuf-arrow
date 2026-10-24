@@ -17,6 +17,7 @@ Unofficial. Not affiliated with turbopuffer or the DuckDB Foundation.
 ## Features
 
 - Ranked queries (BM25, vector, or any `rank_by`) returned as Arrow tables
+- Hybrid search with `multi_query`, and hosted rerankers through `rerank_by`
 - SQL functions `tpuf_search`, `tpuf_bm25`, and `tpuf_ann`, callable once per row
 - Full namespace scans in id order, with filters and columns sent to turbopuffer
 - Upserts from any Arrow stream, including DuckDB relations, batched by request size

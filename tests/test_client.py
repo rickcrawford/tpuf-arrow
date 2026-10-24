@@ -201,6 +201,82 @@ def test_query_with_no_hits_is_an_empty_typed_table(fake, client):
     assert t.schema.names == ["id", "rank", "score", "brand", "price"]
 
 
+def test_query_passes_rerank_by_and_takes_the_models_order(fake, client):
+    fake.seed("ns", rows(5), TYPES)
+    model = {"model": "voyage/rerank-3", "attribute": "brand", "query": "acme"}
+    t = client.query("ns", ("brand", "BM25", "acme"), top_k=3, rerank_by=model)
+    assert fake.calls[-1]["rerank_by"] == model
+    assert fake.calls[-1]["include_attributes"] == ["brand"]  # turbopuffer needs it to rerank
+    assert t.schema.names == ["id", "rank", "score"]  # but it wasn't asked for
+    assert t.column("id").to_pylist() == ["p0002", "p0001", "p0000"]
+    assert t.column("rank").to_pylist() == [1, 2, 3]
+
+
+def test_multi_query_without_rerank_by_returns_a_table_per_query(fake, client):
+    fake.seed("ns", rows(5), TYPES)
+    a, b = client.multi_query(
+        "ns",
+        [{"rank_by": ("brand", "BM25", "x"), "top_k": 2}, {"rank_by": ("id", "asc"), "top_k": 3}],
+        include=["price"],
+    )
+    assert a.schema.names == b.schema.names == ["id", "rank", "score", "price"]
+    assert (a.num_rows, b.num_rows) == (2, 3)
+    assert all(q["include_attributes"] == ["price"] for q in fake.calls[-1]["queries"])
+
+
+def test_multi_query_with_rrf_returns_one_fused_table(fake, client):
+    fake.seed("ns", rows(5), TYPES)
+    queries = [
+        {"rank_by": ("brand", "BM25", "x"), "top_k": 4},
+        {"rank_by": ("price", "ANN", [0.1]), "top_k": 4},
+    ]
+    (fused,) = client.multi_query("ns", queries, rerank_by=("RRF", {}), limit=3, run_id="r", query_id="q")
+    assert fused.num_rows == 3
+    assert fused.column("rank").to_pylist() == [1, 2, 3]
+    log = client.log.to_pylist()[-1]
+    assert (log["kind"], log["rows"], log["run_id"], log["query_id"]) == ("multi_query", 3, "r", "q")
+    assert '"rerank_by": ["RRF", {}]' in log["request"]
+
+
+def test_multi_query_with_a_model_reranks_the_union_and_includes_its_attribute(fake, client):
+    fake.seed("ns", rows(6), TYPES)
+    model = {"model": "voyage/rerank-3", "attribute": "brand", "query": "x"}
+    queries = [{"rank_by": ("id", "asc"), "top_k": 3}, {"rank_by": ("price", "ANN", [0.1]), "top_k": 4}]
+    (merged,) = client.multi_query("ns", queries, rerank_by=model, include=["price"])
+    assert merged.schema.names == ["id", "rank", "score", "price"]
+    assert merged.num_rows == 4  # the union of both queries' hits
+    assert [q["include_attributes"] for q in fake.calls[-1]["queries"]] == [["price", "brand"]] * 2
+    assert "include_attributes" not in queries[0]  # the caller's dicts aren't changed
+
+
+@pytest.mark.parametrize(
+    ("queries", "kwargs", "match"),
+    [
+        ([], {}, "at least one"),
+        ([{"rank_by": ("id", "asc")}] * 5, {}, "max_concurrency is 4"),
+        ([{"rank_by": ("id", "asc"), "include_attributes": True}], {}, "include_attributes; pass include="),
+        ([{"rank_by": ("id", "asc"), "exclude_attributes": ["brand"]}], {}, "exclude_attributes"),
+        ([{"aggregate_by": {"n": ("Count",)}}], {}, "use count"),
+        ([{"rank_by": ("id", "asc")}], {"limit": 3}, "needs rerank_by"),
+    ],
+)
+def test_multi_query_rejects_what_it_cant_return(fake, client, queries, kwargs, match):
+    fake.seed("ns", rows(2), TYPES)
+    with pytest.raises(ValueError, match=match):
+        client.multi_query("ns", queries, **kwargs)
+    assert fake.calls == []
+
+
+def test_multi_query_takes_a_slot_per_query(fake):
+    fake.seed("ns", rows(3), TYPES)
+    fake.delay = 0.05
+    client = Client(fake, max_concurrency=4)
+    two = [{"rank_by": ("id", "asc")}, {"rank_by": ("id", "asc")}]
+    with ThreadPoolExecutor(6) as pool:
+        list(pool.map(lambda _: client.multi_query("ns", two), range(6)))
+    assert fake.max_in_flight <= 2  # each multi_query holds 2 of the 4 slots
+
+
 def test_count(fake, client):
     fake.seed("ns", rows(30), TYPES)
     assert client.count("ns") == 30
@@ -481,6 +557,8 @@ def test_logged_request_is_json_and_skips_attribute_lists(fake, client):
     assert client.log.column("request")[0].as_py() == (
         '{"rank_by": ["brand", "BM25", "acme"], "top_k": 10, "filters": ["price", "Gte", 1]}'
     )
+    client.multi_query("ns", [{"rank_by": ("id", "asc")}], include=True)
+    assert client.log.column("request")[1].as_py() == '{"queries": [{"rank_by": ["id", "asc"]}]}'
 
 
 def test_log_never_contains_the_api_key(no_env):

@@ -30,12 +30,15 @@ Safe to share across threads. It works as a context manager, and `close()` close
 
 | Method | Returns | Requests |
 | --- | --- | --- |
-| `query(namespace, rank_by, *, top_k=10, filters=None, include=None, run_id=None, query_id=None)` | `pa.Table` | 1 |
+| `query(namespace, rank_by, *, top_k=10, filters=None, include=None, rerank_by=None, run_id=None, query_id=None)` | `pa.Table` | 1 |
+| `multi_query(namespace, queries, *, rerank_by=None, limit=None, include=None, run_id=None, query_id=None)` | `list[pa.Table]` | 1 |
 | `scan(namespace, *, filters=None, columns=True, page_size=10_000, limit=None, run_id=None)` | `pa.RecordBatchReader` | 1 per page |
 | `count(namespace, *, filters=None, run_id=None)` | `int` | 1 aggregation |
 | `copy_to(con, namespace, table, **scan_args)` | `int`, rows copied | same as `scan` |
 
-**`query`** returns `id`, `rank` (int32, starting at 1), `score` (float64, turbopuffer's `$dist`), then the included attributes. `include` is a list of attribute names, or `True` for every attribute except vectors. Including an attribute named `rank` or `score` raises `SchemaError`, since it would overwrite those columns. Column types come from the namespace schema, so an empty result has the same columns as a full one. `top_k` can be at most 10,000.
+**`query`** returns `id`, `rank` (int32, starting at 1), `score` (float64, turbopuffer's `$dist`), then the included attributes. `include` is a list of attribute names, or `True` for every attribute except vectors. Including an attribute named `rank` or `score` raises `SchemaError`, since it would overwrite those columns. Column types come from the namespace schema, so an empty result has the same columns as a full one. `top_k` can be at most 10,000. `rerank_by` is passed to turbopuffer, such as `{"model": "voyage/rerank-3", "attribute": "text", "query": q}`, and then `score` is the model's. The attribute it names is requested even if it isn't in `include`, since turbopuffer requires that, but it's returned only if it is.
+
+**`multi_query`** sends `queries`, a list of dicts of query parameters (`rank_by`, `top_k`, `filters`, ...), in one request against one snapshot. Without `rerank_by` it returns one table per query, in order. With it, turbopuffer merges them: `("RRF", {})` fuses by reciprocal rank, and a model reranks their union. The list then holds one table, at most `limit` rows. `limit` needs `rerank_by`. Tables have `query()`'s columns, and `include` picks the attributes for every query. A multi-query takes one `max_concurrency` slot per query. `ValueError` if `queries` is empty, has more queries than `max_concurrency`, or a query sets `include_attributes`, `exclude_attributes`, or `aggregate_by`.
 
 **`scan`** pages through the namespace in id order: rank by id, filter on `id > last id seen`, `page_size` rows per request. `filters` and `columns` are sent to turbopuffer. `columns=True` means every attribute except vectors. `limit` stops after that many rows. The reader is lazy, can be read once, and isn't a snapshot.
 
@@ -91,16 +94,18 @@ An Arrow table with one row per successful request since the last `save_log`. Re
 | Column | Type | |
 | --- | --- | --- |
 | `requested_at` | timestamp, UTC | When the request started |
-| `kind` | string | `query`, `scan`, `count`, or `write` |
+| `kind` | string | `query`, `multi_query`, `scan`, `count`, or `write` |
 | `namespace` | string | |
 | `run_id`, `query_id` | string | Whatever you passed |
-| `request` | string | `rank_by`, `filters`, `top_k`, and `aggregate_by` as JSON. Attribute lists are left out. |
+| `request` | string | The request's parameters (`rank_by`, `filters`, `top_k`, `rerank_by`, `queries`, ...) as JSON. Attribute lists are left out. |
 | `rows` | int64 | Rows returned, or written |
 | `wall_ms` | float64 | Measured by the client from before it waits for a `max_concurrency` slot, so it includes queueing and retries. Use `server_ms` for latency. |
 | `server_ms` | float64 | turbopuffer's `server_total_ms` |
+| `query_execution_ms`, `embedding_ms` | float64 | Parts of the server time: running the query, and embedding the query text |
 | `billable_bytes_queried`, `billable_bytes_returned`, `billable_bytes_written` | int64 | From the response's `billing` |
 | `cache_temperature`, `cache_hit_ratio` | string, float64 | From `performance` |
 | `approx_namespace_size` | int64 | Approximate document count, from `performance` |
+| `exhaustive_search_count` | int64 | Documents searched without the index, usually because they aren't indexed yet |
 | `last_included_write_at` | string | The newest write the query saw. If two runs differ here, they didn't see the same data. |
 | `embedding_tokens` | int64 | Tokens turbopuffer embedded for this request |
 

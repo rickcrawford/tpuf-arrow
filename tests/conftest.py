@@ -76,7 +76,10 @@ class FakeNamespace:
     service: writes go through strict JSON (the SDK serializes with orjson,
     which rejects Decimal, bytes, and NaN), embedded writes over 256 rows get
     a 400, and an unknown namespace gets a 404. Queries rank by id; any other
-    rank_by gets a made-up score of 1/position.
+    rank_by gets a made-up score of 1/position. A rerank_by model reverses the
+    order, and like the service it needs its attribute in include_attributes.
+    multi_query with RRF fuses by reciprocal rank, k=60, and with a model it
+    reranks the union of the queries' hits.
     """
 
     def __init__(self, store: "FakeTurbopuffer", name: str):
@@ -98,7 +101,16 @@ class FakeNamespace:
         with self.store.lock:
             self.store.in_flight -= 1
 
-    def query(self, *, rank_by=None, top_k=10, filters=None, include_attributes=None, aggregate_by=None):
+    def query(
+        self,
+        *,
+        rank_by=None,
+        top_k=10,
+        filters=None,
+        include_attributes=None,
+        aggregate_by=None,
+        rerank_by=None,
+    ):
         self.store.calls.append(
             {
                 "namespace": self.name,
@@ -107,31 +119,60 @@ class FakeNamespace:
                 "filters": filters,
                 "include_attributes": include_attributes,
                 "aggregate_by": aggregate_by,
+                "rerank_by": rerank_by,
             }
         )
         self._enter()
         try:
-            rows = sorted(
-                (r for r in self._ns["rows"].values() if _matches(r, filters)), key=lambda r: r["id"]
-            )
             if aggregate_by:
-                return _resp([], aggregations={"n": len(rows)})
-            by_id = rank_by == ("id", "asc")
-            keep = include_attributes or []
-            return _resp(
-                [
-                    FakeRow(
-                        {
-                            "id": r["id"],
-                            "$dist": 0.0 if by_id else 1.0 / (i + 1),
-                            **{k: r.get(k) for k in keep},
-                        }
-                    )
-                    for i, r in enumerate(rows[:top_k])
-                ]
-            )
+                return _resp(
+                    [], aggregations={"n": sum(_matches(r, filters) for r in self._ns["rows"].values())}
+                )
+            _check_rerank(rerank_by, [include_attributes])
+            rows = self._rows(rank_by, top_k, filters, include_attributes)
+            if rerank_by:
+                rows = _rerank(rows)
+            return _resp(rows)
         finally:
             self._exit()
+
+    def multi_query(self, *, queries, rerank_by=None, limit=None):
+        self.store.calls.append(
+            {"namespace": self.name, "queries": queries, "rerank_by": rerank_by, "limit": limit}
+        )
+        self._enter()
+        try:
+            results = [
+                self._rows(
+                    q.get("rank_by"), q.get("top_k", 10), q.get("filters"), q.get("include_attributes")
+                )
+                for q in queries
+            ]
+            _check_rerank(rerank_by, [q.get("include_attributes") for q in queries])
+            if isinstance(rerank_by, tuple) and rerank_by[0] == "RRF":
+                fused: dict[Any, FakeRow] = {}
+                for rows in results:
+                    for i, r in enumerate(rows, 1):
+                        prev = fused.get(r["id"], {}).get("$dist", 0.0)
+                        fused[r["id"]] = FakeRow({**r, "$dist": prev + 1 / (60 + i)})
+                results = [sorted(fused.values(), key=lambda r: -r["$dist"])[:limit]]
+            elif rerank_by:
+                union = {r["id"]: r for rows in results for r in rows}
+                results = [_rerank(sorted(union.values(), key=lambda r: r["id"]))[:limit]]
+            resp = _resp([r for rows in results for r in rows])
+            resp.results = [SimpleNamespace(rows=rows) for rows in results]
+            return resp
+        finally:
+            self._exit()
+
+    def _rows(self, rank_by, top_k, filters, include_attributes) -> list[FakeRow]:
+        rows = sorted((r for r in self._ns["rows"].values() if _matches(r, filters)), key=lambda r: r["id"])
+        by_id = rank_by == ("id", "asc")
+        keep = include_attributes or []
+        return [
+            FakeRow({"id": r["id"], "$dist": 0.0 if by_id else 1.0 / (i + 1), **{k: r.get(k) for k in keep}})
+            for i, r in enumerate(rows[:top_k])
+        ]
 
     def write(self, *, upsert_columns, schema=None, distance_metric=None):
         body = json.dumps({"upsert_columns": upsert_columns, "schema": schema}, allow_nan=False)
@@ -177,12 +218,27 @@ class FakeNamespace:
         del self.store.data[self.name]
 
 
+def _check_rerank(rerank_by, includes) -> None:
+    attr = rerank_by.get("attribute") if isinstance(rerank_by, dict) else None
+    if attr and any(attr not in (inc or []) for inc in includes):
+        raise status_error(
+            BadRequestError, 400, f"rerank_by attribute `{attr}` must be in include_attributes"
+        )
+
+
+def _rerank(rows: list[FakeRow]) -> list[FakeRow]:
+    return [FakeRow({**r, "$dist": 1.0 / (i + 1)}) for i, r in enumerate(reversed(rows))]
+
+
 def _resp(rows, aggregations=None):
     return SimpleNamespace(
         rows=rows,
         aggregations=aggregations,
         performance=SimpleNamespace(
             server_total_ms=1.0,
+            query_execution_ms=0.5,
+            embedding_ms=None,
+            exhaustive_search_count=0,
             cache_temperature="hot",
             cache_hit_ratio=1.0,
             approx_namespace_size=len(rows),

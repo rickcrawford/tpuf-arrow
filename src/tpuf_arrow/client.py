@@ -48,20 +48,23 @@ RESULT_COLUMNS = ("id", "rank", "score")
 LOG_SCHEMA = pa.schema(
     [
         ("requested_at", pa.timestamp("us", tz="UTC")),
-        ("kind", pa.string()),  # query, scan, count, write
+        ("kind", pa.string()),  # query, multi_query, scan, count, write
         ("namespace", pa.string()),
         ("run_id", pa.string()),
         ("query_id", pa.string()),
-        ("request", pa.string()),  # rank_by, filters, and top_k as JSON
+        ("request", pa.string()),  # the request's parameters as JSON, without attribute lists
         ("rows", pa.int64()),
         ("wall_ms", pa.float64()),
         ("server_ms", pa.float64()),
+        ("query_execution_ms", pa.float64()),
+        ("embedding_ms", pa.float64()),
         ("billable_bytes_queried", pa.int64()),
         ("billable_bytes_returned", pa.int64()),
         ("billable_bytes_written", pa.int64()),
         ("cache_temperature", pa.string()),
         ("cache_hit_ratio", pa.float64()),
         ("approx_namespace_size", pa.int64()),
+        ("exhaustive_search_count", pa.int64()),
         ("last_included_write_at", pa.string()),
         ("embedding_tokens", pa.int64()),
     ]
@@ -180,23 +183,24 @@ class Client:
         top_k: int = 10,
         filters: Any = None,
         include: list[str] | bool | None = None,
+        rerank_by: Any = None,
         run_id: str | None = None,
         query_id: str | None = None,
     ) -> pa.Table:
         """One ranked query, as an Arrow table of id, rank, score, then the included attributes.
 
         score is turbopuffer's $dist: a BM25 score (higher is better) or a
-        vector distance (lower is better), depending on rank_by.
+        vector distance (lower is better), depending on rank_by. With
+        rerank_by, a hosted model such as {"model": "voyage/rerank-3",
+        "attribute": "text", "query": q} reorders the top_k hits, and score is
+        the model's. The attribute it reads is requested for you, and returned
+        only if it's in include.
+
         include=True means every attribute except vectors. An attribute named
         rank or score can't be included, since those names hold the ranking;
         rename it, or use scan() to read it.
         """
-        columns = self._columns(namespace, include)
-        if clash := sorted(set(columns) & {"rank", "score"}):
-            raise SchemaError(
-                f"attribute {clash[0]!r} would overwrite the {clash[0]!r} column query() "
-                f"returns. Leave it out of include=, or read it with scan()."
-            )
+        columns = self._result_columns(namespace, include)
         resp = self._query(
             "query",
             namespace,
@@ -205,22 +209,64 @@ class Client:
             rank_by=rank_by,
             top_k=top_k,
             filters=filters,
-            include_attributes=columns or None,
+            include_attributes=_with_rerank_attribute(columns, rerank_by) or None,
+            rerank_by=rerank_by,
         )
-        rows = [r.to_dict() for r in resp.rows or []]
-        for rank, row in enumerate(rows, 1):
-            row["rank"] = rank
-            row["score"] = row.pop("$dist", None)
-        base = arrow_schema(self.attr_types(namespace), columns)
-        schema = pa.schema(
-            [
-                base.field("id"),
-                ("rank", pa.int32()),
-                ("score", pa.float64()),
-                *[f for f in base if f.name != "id"],
-            ]
+        return self._hits(namespace, resp.rows, columns)
+
+    def multi_query(
+        self,
+        namespace: str,
+        queries: list[dict[str, Any]],
+        *,
+        rerank_by: Any = None,
+        limit: int | None = None,
+        include: list[str] | bool | None = None,
+        run_id: str | None = None,
+        query_id: str | None = None,
+    ) -> list[pa.Table]:
+        """Several queries in one request, against one snapshot of the namespace.
+
+        Each query is a dict of query parameters: rank_by, top_k, filters, and
+        so on. Without rerank_by you get one table per query, in order. With
+        rerank_by, turbopuffer merges the results and you get a list of one
+        table: ("RRF", {}) fuses them with reciprocal rank fusion, and a
+        hosted model reranks their union. limit caps the merged results, so
+        it needs rerank_by.
+
+        Tables have the same columns as query(), and include picks the
+        attributes for every query, so the queries can't set
+        include_attributes or exclude_attributes themselves. Each query takes
+        one max_concurrency slot, and aggregations aren't supported; use
+        count() for those.
+        """
+        if not queries:
+            raise ValueError("multi_query needs at least one query")
+        if len(queries) > self.max_concurrency:
+            raise ValueError(
+                f"multi_query with {len(queries)} queries needs that many slots, "
+                f"and max_concurrency is {self.max_concurrency}"
+            )
+        for q in queries:
+            if bad := sorted({"include_attributes", "exclude_attributes", "aggregate_by"} & q.keys()):
+                hint = "use count()" if bad == ["aggregate_by"] else "pass include= to multi_query"
+                raise ValueError(f"multi_query queries can't set {', '.join(bad)}; {hint}")
+        if limit is not None and rerank_by is None:
+            raise ValueError("limit caps the merged results, so it needs rerank_by")
+        columns = self._result_columns(namespace, include)
+        sent = _with_rerank_attribute(columns, rerank_by)
+        queries = [{**q, "include_attributes": sent} if sent else dict(q) for q in queries]
+        resp = self._query(
+            "multi_query",
+            namespace,
+            run_id=run_id,
+            query_id=query_id,
+            slots=len(queries),
+            queries=queries,
+            rerank_by=rerank_by,
+            limit=limit,
         )
-        return pa.Table.from_pylist(coerce_rows(rows, schema), schema=schema)
+        return [self._hits(namespace, r.rows, columns) for r in resp.results or []]
 
     def scan(
         self,
@@ -519,15 +565,25 @@ class Client:
     ) -> Any:
         params = _given(**params)
         t0 = time.perf_counter()
+        ns = self.tpuf.namespace(namespace)
         with self._slots.take(slots):
-            resp = self.tpuf.namespace(namespace).query(**params)
+            if kind == "multi_query":
+                resp = ns.multi_query(**params)
+                rows = sum(len(r.rows or []) for r in resp.results or [])
+            else:
+                resp = ns.query(**params)
+                rows = len(resp.rows or [])
         request = {k: v for k, v in params.items() if k != "include_attributes"}
+        if "queries" in request:
+            request["queries"] = [
+                {k: v for k, v in q.items() if k != "include_attributes"} for q in request["queries"]
+            ]
         self._record(
             kind,
             namespace,
             resp,
             t0,
-            len(resp.rows or []),
+            rows,
             run_id=run_id,
             query_id=query_id,
             request=json.dumps(request, default=str),
@@ -557,12 +613,15 @@ class Client:
             "rows": rows,
             "wall_ms": (time.perf_counter() - t0) * 1000,
             "server_ms": getattr(perf, "server_total_ms", None),
+            "query_execution_ms": getattr(perf, "query_execution_ms", None),
+            "embedding_ms": getattr(perf, "embedding_ms", None),
             "billable_bytes_queried": getattr(bill, "billable_logical_bytes_queried", None),
             "billable_bytes_returned": getattr(bill, "billable_logical_bytes_returned", None),
             "billable_bytes_written": getattr(bill, "billable_logical_bytes_written", None),
             "cache_temperature": getattr(perf, "cache_temperature", None),
             "cache_hit_ratio": getattr(perf, "cache_hit_ratio", None),
             "approx_namespace_size": getattr(perf, "approx_namespace_size", None),
+            "exhaustive_search_count": getattr(perf, "exhaustive_search_count", None),
             "last_included_write_at": getattr(perf, "last_included_write_at", None),
             "embedding_tokens": getattr(perf, "embedding_tokens", None),
         }
@@ -577,6 +636,32 @@ class Client:
         )
         with self._lock:
             self._log.append(row)
+
+    def _result_columns(self, namespace: str, include: list[str] | bool | None) -> list[str]:
+        columns = self._columns(namespace, include)
+        if clash := sorted(set(columns) & {"rank", "score"}):
+            raise SchemaError(
+                f"attribute {clash[0]!r} would overwrite the {clash[0]!r} column query() "
+                f"returns. Leave it out of include=, or read it with scan()."
+            )
+        return columns
+
+    def _hits(self, namespace: str, rows: Any, columns: list[str]) -> pa.Table:
+        """Response rows as id, rank, score, then the included attributes."""
+        rows = [r.to_dict() for r in rows or []]
+        for rank, row in enumerate(rows, 1):
+            row["rank"] = rank
+            row["score"] = row.pop("$dist", None)
+        base = arrow_schema(self.attr_types(namespace), columns)
+        schema = pa.schema(
+            [
+                base.field("id"),
+                ("rank", pa.int32()),
+                ("score", pa.float64()),
+                *[f for f in base if f.name != "id"],
+            ]
+        )
+        return pa.Table.from_pylist(coerce_rows(rows, schema), schema=schema)
 
     def _columns(self, namespace: str, include: list[str] | bool | None) -> list[str]:
         if include is True:
@@ -606,6 +691,12 @@ def _embeds(existing: dict[str, Any], schema: dict[str, Any] | None) -> bool:
     """Does a write to this namespace carry an attribute turbopuffer embeds?"""
     new = any(isinstance(s, dict) and s.get("embed") for s in (schema or {}).values())
     return new or any(getattr(s, "embed", None) for s in existing.values())
+
+
+def _with_rerank_attribute(columns: list[str], rerank_by: Any) -> list[str]:
+    """turbopuffer only reranks by an attribute the request includes, so add it."""
+    attr = rerank_by.get("attribute") if isinstance(rerank_by, dict) else None
+    return [*columns, attr] if attr and attr not in columns else columns
 
 
 def _given(**kwargs: Any) -> dict[str, Any]:

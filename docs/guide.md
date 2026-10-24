@@ -52,6 +52,32 @@ What `score` means depends on `rank_by`. For BM25 it's a relevance score and hig
 
 `include=True` returns every attribute except vectors. Name a vector attribute in a list if you want it back.
 
+### Hybrid search and reranking
+
+`tp.multi_query()` sends several queries in one request, all against the same snapshot of the namespace. With `rerank_by=("RRF", {})`, turbopuffer fuses them by reciprocal rank and you get back a list holding one table:
+
+```python
+q = "red shoes"
+(hits,) = tp.multi_query(
+    "products",
+    [{"rank_by": ("title", "BM25", q), "top_k": 50}, {"rank_by": ("text", "ANN", ("Embed", q)), "top_k": 50}],
+    rerank_by=("RRF", {}),
+    limit=10,
+    include=["title"],
+)
+```
+
+Without `rerank_by`, the list has one table per query, in order. Each query is a dict of turbopuffer's query parameters, except that `include=` picks the attributes for all of them. A multi-query takes one `max_concurrency` slot per query.
+
+`rerank_by` on `query()` hands the hits to one of turbopuffer's hosted [rerankers](https://turbopuffer.com/docs/reranking), and `score` becomes the model's. Filtering on a list of ids reranks a fixed candidate set, which is how you compare rerankers on the same input:
+
+```python
+model = {"model": "voyage/rerank-3", "attribute": "text", "query": q}
+reranked = tp.query("products", ("id", "asc"), top_k=len(ids), filters=("id", "In", ids), rerank_by=model)
+```
+
+turbopuffer only reranks by an attribute the request includes, so tpuf-arrow asks for it. It's in the result only if it's in `include`. `rerank_by` works on `multi_query()` too, where the model reranks the union of the queries' hits. Hosted models have to be enabled for your org.
+
 ## Searching from SQL
 
 `ta.register(con, tp)` adds three functions to that connection. Each returns a list of `{id, rank, score}` structs, and `unnest(..., recursive := true)` turns the list into rows.
@@ -218,7 +244,12 @@ SELECT kind, count(*) AS requests,
 FROM tpuf_requests GROUP BY kind;
 ```
 
-Pass `run_id=` to `query`, `scan`, `count`, or `upsert` to tag the requests, and `query_id=` to `query`, so you can group the log by experiment or by query later.
+Pass `run_id=` to `query`, `multi_query`, `scan`, `count`, or `upsert` to tag the requests, and `query_id=` to `query` or `multi_query`, so you can group the log by experiment or by query later. If you keep the hits in a table with the same two columns, a join puts each query's server time and cost next to its hits:
+
+```sql
+SELECT h.*, l.server_ms, l.billable_bytes_queried
+FROM hits h JOIN tpuf_requests l ON l.run_id = h.run_id AND l.query_id = h.query_id;
+```
 
 turbopuffer bills every query for at least 1.28 GB queried, even when the namespace is smaller, so on a small namespace each search costs about the same. A scan is one billed query per page.
 
@@ -236,7 +267,7 @@ The API key is never logged. Be careful with `TURBOPUFFER_LOG=debug`, which turn
 
 ## Concurrency
 
-An unpinned turbopuffer namespace runs 16 queries at a time. BM25 and ANN queries use one of those slots each, exact kNN uses two, and aggregations like `count()` use four. The client lets at most `max_concurrency` requests (default 8) run at once across all its threads, and counts a `count()` as four of them. That leaves room for other clients on the same namespace. If you get 429s anyway, the SDK retries them with backoff, up to `max_retries` (default 6). If you still get `RateLimitError` after the retries, lower `max_concurrency`:
+An unpinned turbopuffer namespace runs 16 queries at a time. BM25 and ANN queries use one of those slots each, exact kNN uses two, and aggregations like `count()` use four. The client lets at most `max_concurrency` requests (default 8) run at once across all its threads, and counts a `count()` as four of them and a `multi_query()` as one per query. That leaves room for other clients on the same namespace. If you get 429s anyway, the SDK retries them with backoff, up to `max_retries` (default 6). If you still get `RateLimitError` after the retries, lower `max_concurrency`:
 
 ```python
 tp = ta.connect(max_concurrency=4)

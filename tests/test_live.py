@@ -9,7 +9,7 @@ import datetime as dt
 
 import pyarrow as pa
 import pytest
-from turbopuffer import AuthenticationError, PermissionDeniedError
+from turbopuffer import AuthenticationError, BadRequestError, PermissionDeniedError
 
 import tpuf_arrow as ta
 
@@ -129,6 +129,35 @@ def test_query_includes_attributes(live, sample_ns):
     assert "embed_text" not in t.schema.names  # vectors stay out unless asked for
     assert t.num_rows == 3
     assert all("ehumidifier" in s.lower() for s in t.column("title").to_pylist())
+
+
+def test_hybrid_multi_query_fuses_bm25_and_ann(live, sample_ns):
+    q = "running shoes"
+    bm25 = {"rank_by": ("title", "BM25", q), "top_k": 20}
+    ann = {"rank_by": ("text", "ANN", ("Embed", q)), "top_k": 20}
+    separate = live.multi_query(sample_ns, [bm25, ann])
+    assert [t.num_rows for t in separate] == [20, 20]
+    (fused,) = live.multi_query(sample_ns, [bm25, ann], rerank_by=("RRF", {}), limit=10, include=["title"])
+    assert fused.schema.names == ["id", "rank", "score", "title"]
+    assert fused.num_rows == 10
+    pooled = set(separate[0].column("id").to_pylist()) | set(separate[1].column("id").to_pylist())
+    assert set(fused.column("id").to_pylist()) <= pooled
+    assert live.log.column("kind").to_pylist()[-1] == "multi_query"
+
+
+def test_hosted_reranker_reorders_a_fixed_candidate_set(live, sample_ns):
+    q = "running shoes"
+    ids = live.query(sample_ns, ("text", "ANN", ("Embed", q)), top_k=10).column("id").to_pylist()
+    model = {"model": "voyage/rerank-3-lite", "attribute": "text", "query": q}
+    try:
+        t = live.query(sample_ns, ("id", "asc"), top_k=10, filters=("id", "In", ids), rerank_by=model)
+    except BadRequestError as e:
+        if "not enabled" in str(e):
+            pytest.skip("voyage/rerank-3-lite isn't enabled for this org")
+        raise
+    assert sorted(t.column("id").to_pylist()) == sorted(ids)
+    scores = t.column("score").to_pylist()
+    assert scores == sorted(scores, reverse=True)  # the model's relevance, best first
 
 
 def test_request_log_records_billing(live, sample_ns, sample_con):

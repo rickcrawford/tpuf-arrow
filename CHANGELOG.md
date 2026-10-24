@@ -7,7 +7,8 @@ The first release.
 ### What's in it
 
 - `connect()` reads settings from arguments, the environment, or a dotenv file you name.
-- `Client.query()` runs one ranked query and returns an Arrow table.
+- `Client.query()` runs one ranked query and returns an Arrow table, optionally reranked by a hosted model.
+- `Client.multi_query()` runs several queries against one snapshot, fused with reciprocal rank fusion or reranked together, for hybrid search.
 - `Client.scan()` reads a whole namespace, or the rows a filter matches, in id order, and `copy_to()` writes the rows into a DuckDB table. `count()` counts on the server.
 - `Client.upsert()` writes any Arrow stream, such as a DuckDB relation. Requests are sized by bytes to earn the batch discount, and new attributes are typed from Arrow.
 - `register()` adds `tpuf_search`, `tpuf_bm25`, and `tpuf_ann` to a DuckDB connection, to search once per row from SQL.
@@ -38,7 +39,7 @@ The first release.
 **SQL, costs, and logging**
 
 - A search per row waits on turbopuffer once per batch of up to 2,048 rows, so turbopuffer's latency and `max_concurrency` set the pace.
-- No hybrid or multi-query helper yet. `tp.tpuf.namespace(ns).multi_query(...)` works but isn't converted to Arrow or logged.
+- The SQL functions run single queries. Hybrid search and reranking are Python only.
 - Every query is billed for at least 1.28 GB, so on a small namespace each search costs about the same.
 - The request log grows in memory until `save_log()`.
 - DEBUG logging records search text, and `TURBOPUFFER_LOG=debug` records full request bodies ([guide](docs/guide.md#logging)).
