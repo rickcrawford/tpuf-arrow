@@ -1,0 +1,132 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  UV_VERSION: "0.9.15"  # keep inside the uv_build range in pyproject.toml
+
+jobs:
+  # Tests and lint run without any token permissions, so a bad dev dependency
+  # can't mint an OIDC token or forge an attestation.
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - name: Check the tag matches the version and the changelog
+        run: |
+          version="$(uv version --short)"
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "tag $GITHUB_REF_NAME, version $version"; exit 1; }
+          grep -qE "^## $version " CHANGELOG.md || { echo "CHANGELOG.md has no section for $version"; exit 1; }
+          if grep -qiE "^## $version .*unreleased" CHANGELOG.md; then echo "CHANGELOG.md still says unreleased"; exit 1; fi
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked pyright
+      - run: uv run --locked pytest -m "not live"
+
+  build:
+    needs: check
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: false
+      - run: uv build
+      - name: Install the wheel in a clean environment and import it
+        run: |
+          uv venv /tmp/smoke --python 3.13
+          uv pip install --python /tmp/smoke/bin/python dist/*.whl
+          cd /tmp && /tmp/smoke/bin/python -I -c "import tpuf_arrow as ta; print(ta.__version__)"
+      - name: Check nothing private got packaged
+        run: |
+          { for f in dist/*.whl; do unzip -l "$f"; done; for f in dist/*.tar.gz; do tar tzf "$f"; done; } > contents.txt
+          if grep -E '\.env|tests/|\.duckdb' contents.txt; then echo "private files in dist"; exit 1; fi
+      - uses: actions/attest-build-provenance@v4
+        with:
+          subject-path: |
+            dist/*.whl
+            dist/*.tar.gz
+      - name: Release notes from CHANGELOG.md
+        run: |
+          awk -v v="${GITHUB_REF_NAME#v}" '
+            /^## / { on = ($2 "" == v ""); next }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          test -s notes.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: notes
+          path: notes.md
+
+  testpypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: testpypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          skip-existing: true  # so re-running a release that failed later still gets to PyPI
+
+  pypi:
+    needs: testpypi
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist/
+      - uses: actions/download-artifact@v8
+        with:
+          name: notes
+      - run: cd dist && sha256sum -- *.whl *.tar.gz > SHA256SUMS
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --notes-file notes.md

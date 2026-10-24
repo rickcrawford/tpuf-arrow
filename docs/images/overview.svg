@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 400" width="960" height="400" role="img" aria-labelledby="t d">
+  <title id="t">How tpuf-arrow fits between DuckDB and turbopuffer</title>
+  <desc id="d">DuckDB in your process exchanges Arrow tables with tpuf_arrow, which sends queries and writes to turbopuffer over HTTPS and logs every request to a DuckDB table.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .h { font-size: 20px; font-weight: 600; }
+    .s { font-size: 13px; fill: #59636e; }
+    .i { font-size: 14px; }
+    .a { font-size: 13px; fill: #59636e; }
+    .b { font-weight: 600; }
+    .ln { stroke: #8c959f; stroke-width: 2; fill: none; }
+    .head { fill: #8c959f; }
+    .duck { fill: #fff3c4; stroke: #d4a72c; stroke-width: 2; }
+    .pkg { fill: #ddf4ff; stroke: #54aeff; stroke-width: 2; }
+    .tp { fill: #ffe7f2; stroke: #e85aad; stroke-width: 2; }
+    .log { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .page { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      text { fill: #e6edf3; }
+      .s, .a { fill: #9198a1; }
+      .ln { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .duck { fill: #3a2f0b; }
+      .pkg { fill: #0c2d48; stroke: #4493f8; }
+      .tp { fill: #3d1430; }
+      .log, .page { fill: #161b22; stroke: #6e7681; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="960" height="400"/>
+
+  <rect x="20" y="40" width="260" height="250" rx="12" class="duck"/>
+  <text class="h" x="40" y="74">DuckDB</text>
+  <text class="s" x="40" y="94">in your process</text>
+  <text class="i" x="40" y="134">JOIN hits to your tables</text>
+  <text class="i" x="40" y="162">GROUP BY, window functions</text>
+  <text class="i" x="40" y="190">nDCG, recall, cost in SQL</text>
+  <text class="i" x="40" y="218">Parquet, CSV, S3 in and out</text>
+  <text class="i" x="40" y="246">your queries table, row by row</text>
+
+  <rect x="350" y="40" width="260" height="250" rx="12" class="pkg"/>
+  <text class="h" x="370" y="74">tpuf_arrow</text>
+  <text class="s" x="370" y="94">this package</text>
+  <text class="i" x="370" y="134">query(), tpuf_bm25, tpuf_ann</text>
+  <text class="i" x="370" y="162">scan(), copy_to(), count()</text>
+  <text class="i" x="370" y="190">upsert(), batched by bytes</text>
+  <text class="i" x="370" y="218">Arrow ⇄ turbopuffer types</text>
+  <text class="i" x="370" y="246">≤ 8 requests in flight</text>
+
+  <rect x="680" y="40" width="260" height="250" rx="12" class="tp"/>
+  <text class="h" x="700" y="74">turbopuffer</text>
+  <text class="s" x="700" y="94">hosted, on object storage</text>
+  <text class="i" x="700" y="134">BM25 full-text search</text>
+  <text class="i" x="700" y="162">vector search, embeds for you</text>
+  <text class="i" x="700" y="190">filters and aggregations</text>
+  <text class="i" x="700" y="218">namespaces, billed per query</text>
+
+  <path class="ln" marker-end="url(#arrow)" d="M350,125 L282,125"/>
+  <text class="a" x="316" y="116" text-anchor="middle">Arrow</text>
+  <path class="ln" marker-end="url(#arrow)" d="M280,205 L348,205"/>
+  <text class="a" x="316" y="196" text-anchor="middle">rows</text>
+
+  <path class="ln" marker-end="url(#arrow)" d="M610,125 L678,125"/>
+  <text class="a" x="645" y="116" text-anchor="middle">HTTPS</text>
+  <path class="ln" marker-end="url(#arrow)" d="M680,205 L612,205"/>
+  <text class="a" x="645" y="196" text-anchor="middle">hits</text>
+
+  <rect x="20" y="320" width="920" height="56" rx="10" class="log"/>
+  <text class="i" x="40" y="353">Every request → <tspan class="b">tpuf_requests</tspan> table in DuckDB: billed bytes, server time, cache temperature, data version</text>
+  <path class="ln" marker-end="url(#arrow)" d="M480,290 L480,318"/>
+</svg>

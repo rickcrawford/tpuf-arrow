@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-labelledby="t d">
+  <title id="t">How scan() pages through a namespace</title>
+  <desc id="d">turbopuffer has no export endpoint. scan() ranks by id and asks for up to 10,000 rows at a time, filtering on id greater than the last id it saw, until a page comes back short. Each page becomes an Arrow record batch that DuckDB reads.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .h { font-size: 20px; font-weight: 600; }
+    .s { font-size: 13px; fill: #59636e; }
+    .i { font-size: 14px; }
+    .a { font-size: 13px; fill: #59636e; }
+    .b { font-weight: 600; }
+    .ln { stroke: #8c959f; stroke-width: 2; fill: none; }
+    .head { fill: #8c959f; }
+    .duck { fill: #fff3c4; stroke: #d4a72c; stroke-width: 2; }
+    .pkg { fill: #ddf4ff; stroke: #54aeff; stroke-width: 2; }
+    .tp { fill: #ffe7f2; stroke: #e85aad; stroke-width: 2; }
+    .log { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .page { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      text { fill: #e6edf3; }
+      .s, .a { fill: #9198a1; }
+      .ln { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .duck { fill: #3a2f0b; }
+      .pkg { fill: #0c2d48; stroke: #4493f8; }
+      .tp { fill: #3d1430; }
+      .log, .page { fill: #161b22; stroke: #6e7681; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="960" height="300"/>
+
+  <text class="s" x="20" y="34">namespace, in id order</text>
+  <rect class="page" x="20" y="46" width="260" height="54" rx="6"/>
+  <rect class="page" x="290" y="46" width="260" height="54" rx="6"/>
+  <rect class="page" x="560" y="46" width="260" height="54" rx="6"/>
+  <rect class="page" x="830" y="46" width="110" height="54" rx="6"/>
+  <text class="i b" x="36" y="79">page 1: 10,000 rows</text>
+  <text class="i b" x="306" y="79">page 2: 10,000 rows</text>
+  <text class="i b" x="576" y="79">page 3: 10,000 rows</text>
+  <text class="i b" x="846" y="79">4: 3,120</text>
+
+  <text class="a" x="36" y="128" style="font-family: ui-monospace, Menlo, monospace">filters: yours</text>
+  <text class="a" x="306" y="128" style="font-family: ui-monospace, Menlo, monospace">yours AND id &gt; last</text>
+  <text class="a" x="576" y="128" style="font-family: ui-monospace, Menlo, monospace">yours AND id &gt; last</text>
+  <text class="a" x="846" y="128">short: stop</text>
+
+  <path class="ln" marker-end="url(#arrow)" d="M150,140 L150,186"/>
+  <path class="ln" marker-end="url(#arrow)" d="M420,140 L420,186"/>
+  <path class="ln" marker-end="url(#arrow)" d="M690,140 L690,186"/>
+  <path class="ln" marker-end="url(#arrow)" d="M885,140 L885,186"/>
+
+  <rect class="pkg" x="20" y="190" width="920" height="80" rx="10"/>
+  <text class="h" x="40" y="224">RecordBatchReader → DuckDB</text>
+  <text class="s" x="40" y="250">lazy: a page is fetched when DuckDB asks for it. Each page is one billed query, and the reader can be read once.</text>
+</svg>

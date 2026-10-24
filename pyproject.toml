@@ -1,0 +1,92 @@
+[project]
+name = "tpuf-arrow"
+version = "0.1.0"
+description = "Unofficial: search turbopuffer from DuckDB SQL, through Arrow"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+    { name = "Rick Crawford" }
+]
+requires-python = ">=3.12"
+keywords = ["duckdb", "turbopuffer", "vector search", "bm25", "arrow", "search evaluation"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+    "Typing :: Typed",
+]
+dependencies = [
+    "duckdb>=2.0,<3",
+    "numpy>=2.1",            # DuckDB's Arrow UDFs need it
+    "pyarrow>=26.0",
+    "python-dotenv>=1.0",
+    "turbopuffer>=2.14,<3",
+]
+
+[project.urls]
+Homepage = "https://github.com/rickcrawford/tpuf-arrow"
+Documentation = "https://github.com/rickcrawford/tpuf-arrow/tree/main/docs"
+Issues = "https://github.com/rickcrawford/tpuf-arrow/issues"
+Changelog = "https://github.com/rickcrawford/tpuf-arrow/blob/main/CHANGELOG.md"
+
+[build-system]
+requires = ["uv_build>=0.9.15,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "hypothesis>=6.170.9",
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+    "pytest-cov>=7.1.0",
+    "ruff>=0.17.2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = ["live: talks to turbopuffer; needs TURBOPUFFER_API_KEY (skipped without it)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.ruff.format]
+exclude = ["*.md"]  # code in the docs is aligned by hand for reading
+
+[tool.ruff.lint]
+select = [
+    "E", "W", "F",  # pycodestyle, pyflakes
+    "I",            # import order
+    "B",            # bugbear
+    "UP",           # pyupgrade
+    "SIM",          # simplifications
+    "C4",           # comprehensions
+    "PT",           # pytest style
+    "RUF",          # ruff's own
+    "S",            # bandit security checks
+]
+ignore = ["S101", "S608"]  # asserts are fine in tests; S608 flags f-string SQL, and identifiers go through _ident
+
+[tool.ruff.lint.isort]
+known-local-folder = ["_common", "conftest"]  # sibling modules in examples/ and tests/
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S"]
+
+[tool.pyright]
+include = ["src", "tests", "examples", "scripts"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+
+[tool.coverage.run]
+source = ["tpuf_arrow"]
+branch = true
+
+[tool.coverage.report]
+fail_under = 95
+show_missing = true

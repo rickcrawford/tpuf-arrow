@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-labelledby="t d">
+  <title id="t">How a search per row runs from SQL</title>
+  <desc id="d">Each row of a queries table calls tpuf_bm25. DuckDB passes up to 2,048 rows per batch; identical searches are sent once, and at most 8 run at a time against turbopuffer. Each row gets back a list of hits, which unnest turns into rows to join against judgments and score.</desc>
+  <style>
+    .bg { fill: #ffffff; }
+    text { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; fill: #1f2328; }
+    .h { font-size: 20px; font-weight: 600; }
+    .s { font-size: 13px; fill: #59636e; }
+    .i { font-size: 14px; }
+    .a { font-size: 13px; fill: #59636e; }
+    .b { font-weight: 600; }
+    .ln { stroke: #8c959f; stroke-width: 2; fill: none; }
+    .head { fill: #8c959f; }
+    .duck { fill: #fff3c4; stroke: #d4a72c; stroke-width: 2; }
+    .pkg { fill: #ddf4ff; stroke: #54aeff; stroke-width: 2; }
+    .tp { fill: #ffe7f2; stroke: #e85aad; stroke-width: 2; }
+    .log { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; stroke-dasharray: 5 4; }
+    .page { fill: #f6f8fa; stroke: #8c959f; stroke-width: 1.5; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #0d1117; }
+      text { fill: #e6edf3; }
+      .s, .a { fill: #9198a1; }
+      .ln { stroke: #6e7681; }
+      .head { fill: #6e7681; }
+      .duck { fill: #3a2f0b; }
+      .pkg { fill: #0c2d48; stroke: #4493f8; }
+      .tp { fill: #3d1430; }
+      .log, .page { fill: #161b22; stroke: #6e7681; }
+    }
+  </style>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path class="head" d="M0,0 L10,5 L0,10 z"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="960" height="300"/>
+
+  <rect class="duck" x="20" y="30" width="180" height="80" rx="10"/>
+  <text class="h" x="36" y="62">queries</text>
+  <text class="s" x="36" y="86">one row per search</text>
+
+  <rect class="duck" x="240" y="30" width="200" height="80" rx="10"/>
+  <text class="h" x="256" y="62" style="font-family: ui-monospace, Menlo, monospace; font-size: 17px">tpuf_bm25(...)</text>
+  <text class="s" x="256" y="86">or tpuf_ann, tpuf_search</text>
+
+  <rect class="pkg" x="480" y="30" width="210" height="80" rx="10"/>
+  <text class="h" x="496" y="62">≤ 2,048 rows a call</text>
+  <text class="s" x="496" y="86">repeated searches sent once</text>
+
+  <rect class="tp" x="730" y="30" width="210" height="80" rx="10"/>
+  <text class="h" x="746" y="62">turbopuffer</text>
+  <text class="s" x="746" y="86">≤ 8 queries in flight</text>
+
+  <rect class="tp" x="730" y="190" width="210" height="80" rx="10"/>
+  <text class="h" x="746" y="222" style="font-family: ui-monospace, Menlo, monospace; font-size: 15px">LIST(STRUCT(</text>
+  <text class="s" x="746" y="246" style="font-family: ui-monospace, Menlo, monospace">  id, rank, score))</text>
+
+  <rect class="duck" x="480" y="190" width="210" height="80" rx="10"/>
+  <text class="h" x="496" y="222" style="font-family: ui-monospace, Menlo, monospace; font-size: 17px">unnest(...)</text>
+  <text class="s" x="496" y="246">one row per hit</text>
+
+  <rect class="duck" x="240" y="190" width="200" height="80" rx="10"/>
+  <text class="h" x="256" y="222">JOIN judgments</text>
+  <text class="s" x="256" y="246">or orders, inventory, ...</text>
+
+  <rect class="duck" x="20" y="190" width="180" height="80" rx="10"/>
+  <text class="h" x="36" y="222">nDCG@10</text>
+  <text class="s" x="36" y="246">GROUP BY run</text>
+
+  <path class="ln" marker-end="url(#arrow)" d="M200,70 L238,70"/>
+  <path class="ln" marker-end="url(#arrow)" d="M440,70 L478,70"/>
+  <path class="ln" marker-end="url(#arrow)" d="M690,70 L728,70"/>
+  <path class="ln" marker-end="url(#arrow)" d="M835,110 L835,188"/>
+  <path class="ln" marker-end="url(#arrow)" d="M730,230 L692,230"/>
+  <path class="ln" marker-end="url(#arrow)" d="M480,230 L442,230"/>
+  <path class="ln" marker-end="url(#arrow)" d="M240,230 L202,230"/>
+  <text class="a" x="848" y="154">per row</text>
+</svg>

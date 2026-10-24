@@ -1,0 +1,109 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.9.15"  # keep inside the uv_build range in pyproject.toml
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv sync --locked
+      - run: uv run --locked ruff check .
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked pyright
+
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+        resolution: [highest, lowest-direct]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+          python-version: ${{ matrix.python }}
+      - run: uv run --resolution ${{ matrix.resolution }} pytest -m "not live" --cov --cov-report=xml
+      - uses: actions/upload-artifact@v7
+        if: matrix.python == '3.12' && matrix.resolution == 'highest'
+        with:
+          name: coverage
+          path: coverage.xml
+
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv build
+      - name: Install the wheel in a clean environment and import it
+        run: |
+          uv venv /tmp/smoke --python 3.13
+          uv pip install --python /tmp/smoke/bin/python dist/*.whl
+          cd /tmp && /tmp/smoke/bin/python -I -c "import tpuf_arrow as ta; print(ta.__version__)"
+      - name: Check nothing private got packaged
+        run: |
+          { for f in dist/*.whl; do unzip -l "$f"; done; for f in dist/*.tar.gz; do tar tzf "$f"; done; } > contents.txt
+          if grep -E '\.env|tests/|\.duckdb' contents.txt; then echo "private files in dist"; exit 1; fi
+      - run: cd dist && sha256sum -- *.whl *.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS
+          if-no-files-found: error
+
+  live:
+    # Talks to turbopuffer with the TURBOPUFFER_API_KEY secret, so it runs on
+    # pushes to main only. Pull requests from forks never see the secret.
+    if: github.event_name == 'push'
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: live
+      cancel-in-progress: false
+    env:
+      HAS_KEY: ${{ secrets.TURBOPUFFER_API_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v7
+        if: env.HAS_KEY == 'true'
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v10
+        if: env.HAS_KEY == 'true'
+        with:
+          version: ${{ env.UV_VERSION }}
+      - run: uv run --locked pytest -m live
+        if: env.HAS_KEY == 'true'
+        env:
+          TURBOPUFFER_API_KEY: ${{ secrets.TURBOPUFFER_API_KEY }}
