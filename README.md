@@ -11,20 +11,6 @@ It's unofficial and not affiliated with turbopuffer or the DuckDB Foundation.
 
 ![DuckDB and tpuf-arrow run in your Python process and trade Arrow tables; tpuf-arrow talks to turbopuffer over HTTPS](https://raw.githubusercontent.com/rickcrawford/tpuf-arrow/main/docs/images/overview.svg)
 
-## Why you'd want it
-
-turbopuffer does the retrieval: BM25 and vector search over data in object storage, and it can embed your text for you. It doesn't do joins, and you wouldn't compute nDCG in it. DuckDB is good at both and runs in-process. Without something between them you end up writing the same loop every time: run a query, collect the ids, build a DataFrame, join it. This package turns that loop into SQL.
-
-```sql
--- search every query in the table, join the hits to human grades
-SELECT q.query_id, h.rank, j.grade
-FROM queries q,
-     LATERAL (SELECT unnest(tpuf_ann('products', 'text', q.text, 10, NULL), recursive := true)) h
-LEFT JOIN judgments j ON j.query_id = q.query_id AND j.doc_id = h.id;
-```
-
-[`examples/02_evaluate.py`](examples/02_evaluate.py) does this for the bundled sample (24 real shopping queries, 843 products) and prints nDCG@10 of about 0.76 for vector search and 0.67 for BM25, with bootstrap intervals. Each request is also logged with its billed bytes and server time, and at list price those 48 searches cost about $0.00006 ([`05_cost_report.py`](examples/05_cost_report.py) shows how to get that number).
-
 ## Install
 
 ```sh
