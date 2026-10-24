@@ -3,82 +3,105 @@
   <img alt="turbopuffer" src="https://raw.githubusercontent.com/rickcrawford/tpuf-arrow/main/docs/images/turbopuffer/lockup_light.svg" height="44">
 </picture>
 
-# turbopuffer + DuckDB
+# tpuf-arrow
 
-tpuf-arrow lets you search [turbopuffer](https://turbopuffer.com) from [DuckDB](https://duckdb.org) SQL. You can run a search for every row of a table, join the hits to your own data, score them against relevance grades, and see what each request cost, without leaving the SQL session.
+[![ci](https://github.com/rickcrawford/tpuf-arrow/actions/workflows/ci.yml/badge.svg)](https://github.com/rickcrawford/tpuf-arrow/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-It's unofficial and not affiliated with turbopuffer or the DuckDB Foundation.
+Query [turbopuffer](https://turbopuffer.com) namespaces from [DuckDB](https://duckdb.org). Results come back as Arrow tables, and a set of SQL functions runs searches from inside a query.
 
-![DuckDB and tpuf-arrow run in your Python process and trade Arrow tables; tpuf-arrow talks to turbopuffer over HTTPS](https://raw.githubusercontent.com/rickcrawford/tpuf-arrow/main/docs/images/overview.svg)
+Unofficial. Not affiliated with turbopuffer or the DuckDB Foundation.
 
-## Install
+![Architecture overview](https://raw.githubusercontent.com/rickcrawford/tpuf-arrow/main/docs/images/overview.svg)
+
+## Features
+
+- Ranked queries (BM25, vector, or any `rank_by`) returned as Arrow tables
+- SQL functions `tpuf_search`, `tpuf_bm25`, and `tpuf_ann`, callable once per row
+- Full namespace scans in id order, with filters and columns sent to turbopuffer
+- Upserts from any Arrow stream, including DuckDB relations, batched by request size
+- A per-request log of billed bytes and timings that can be saved to DuckDB
+
+## Requirements
+
+- Python 3.12+
+- DuckDB 2.x
+- A turbopuffer API key
+
+## Installation
 
 ```sh
-pip install tpuf-arrow        # or: uv add tpuf-arrow
+pip install tpuf-arrow
 ```
 
-You need Python 3.12 or later and a turbopuffer API key. It installs DuckDB 2.x, pyarrow, numpy, python-dotenv, and the turbopuffer SDK.
-
-## Try it
-
-Clone the repo and load the sample into your turbopuffer account:
-
-```sh
-git clone https://github.com/rickcrawford/tpuf-arrow && cd tpuf-arrow
-echo 'TURBOPUFFER_API_KEY=tpuf_...' > .env
-uv run scripts/load_sample.py      # 843 products into tpuf-arrow-sample, about 85k embedding tokens
-```
-
-Then, in `uv run python`:
+## Quick start
 
 ```python
 import duckdb
 import tpuf_arrow as ta
 
-tp = ta.connect(env_file=".env")
+tp = ta.connect()            # uses TURBOPUFFER_API_KEY and TURBOPUFFER_REGION
 con = duckdb.connect()
-ta.register(con, tp)               # adds tpuf_search, tpuf_bm25, and tpuf_ann to con
-ns = "tpuf-arrow-sample"
+ta.register(con, tp)         # adds the SQL functions to this connection
 
-# From Python. The result is an Arrow table, and DuckDB can query it by name.
-hits = tp.query(ns, ("title", "BM25", "running shoes"), top_k=5, include=["title"])
+# Python
+hits = tp.query("products", ("title", "BM25", "running shoes"), top_k=5, include=["title"])
 con.sql("SELECT rank, title FROM hits").show()
 
-# From SQL
-con.sql(f"SELECT unnest(tpuf_ann('{ns}', 'text', 'running shoes', 5, NULL), recursive := true)").show()
+# SQL
+con.sql("SELECT unnest(tpuf_bm25('products', 'title', 'running shoes', 5, NULL), recursive := true)").show()
 
-# Copy the rows a filter matches into a DuckDB table. The filter runs in turbopuffer.
-tp.copy_to(con, ns, "asics", filters=("brand", "Eq", "ASICS"))
+# Scan rows into a DuckDB table
+tp.copy_to(con, "products", "asics", filters=("brand", "Eq", "ASICS"))
 ```
 
-Or run the examples: `uv run examples/01_search.py`.
+## Configuration
 
-## Docs
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| API key | `TURBOPUFFER_API_KEY` | required |
+| Region | `TURBOPUFFER_REGION` | `aws-us-east-1` |
 
-| | |
-| --- | --- |
-| [Guide](docs/guide.md) | Searching, scanning, writing, costs, and logging, with examples |
-| [Reference](docs/reference.md) | Every function, parameter, SQL function, and error |
-| [Architecture](docs/architecture.md) | How it works, what runs in turbopuffer versus DuckDB, and what a native extension would change |
-| [Troubleshooting](docs/troubleshooting.md) | Error messages and what to do about them |
-| [Changelog](CHANGELOG.md) | Release notes, including the rough edges in this version |
+Both can also be passed to `connect()`, or read from a file with `connect(env_file=".env")`.
+
+## Documentation
+
+- [Guide](docs/guide.md)
+- [API reference](docs/reference.md)
+- [Architecture](docs/architecture.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Changelog](CHANGELOG.md)
 
 ## Examples
 
-| | |
+The examples run against a small sample dataset in [`data/`](data/README.md). Load it into your account first:
+
+```sh
+git clone https://github.com/rickcrawford/tpuf-arrow && cd tpuf-arrow
+echo 'TURBOPUFFER_API_KEY=tpuf_...' > .env
+uv run scripts/load_sample.py
+uv run examples/01_search.py
+```
+
+| Example | |
 | --- | --- |
-| [`01_search.py`](examples/01_search.py) | Search from Python and from SQL, with a filter, and join the hits to a table |
-| [`02_evaluate.py`](examples/02_evaluate.py) | Compare BM25 and vector search with nDCG@10 and a bootstrap interval |
-| [`03_load_your_data.py`](examples/03_load_your_data.py) | Load a Parquet, CSV, or JSON file into a new namespace with BM25 and embeddings |
-| [`04_export.py`](examples/04_export.py) | Export a namespace, or the rows a filter matches, to Parquet |
-| [`05_cost_report.py`](examples/05_cost_report.py) | Request counts, latency percentiles, and list-price cost from the request log |
+| [`01_search.py`](examples/01_search.py) | Search from Python and SQL, with a filter and a join |
+| [`02_evaluate.py`](examples/02_evaluate.py) | nDCG@10 for BM25 and vector search against relevance grades |
+| [`03_load_your_data.py`](examples/03_load_your_data.py) | Load a Parquet, CSV, or JSON file into a namespace |
+| [`04_export.py`](examples/04_export.py) | Export a namespace to Parquet |
+| [`05_cost_report.py`](examples/05_cost_report.py) | Cost and latency from the request log |
 
-The sample in [`data/`](data/README.md) is a slice of Amazon's [Shopping Queries dataset](https://github.com/amazon-science/esci-data) (Apache-2.0), with human relevance grades.
+## Development
 
-## Contributing
+```sh
+uv sync
+uv run pytest -m "not live"
+```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). The tests run offline against a fake turbopuffer, and against the real service when `TURBOPUFFER_API_KEY` is set.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for live tests, linting, and releases.
 
 ## License
 
-MIT, see [LICENSE](LICENSE). The turbopuffer logo belongs to turbopuffer and is shown here to refer to their product. DuckDB is a trademark of the DuckDB Foundation.
+MIT. See [LICENSE](LICENSE).
+
+The turbopuffer logo belongs to turbopuffer. DuckDB is a trademark of the DuckDB Foundation. The sample data comes from Amazon's [Shopping Queries dataset](https://github.com/amazon-science/esci-data) (Apache-2.0).
