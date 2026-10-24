@@ -83,8 +83,9 @@ jobs:
           if-no-files-found: error
 
   live:
-    # Talks to turbopuffer with the TURBOPUFFER_API_KEY secret, so it runs on
-    # pushes to main only. Pull requests from forks never see the secret.
+    # Optional. Talks to turbopuffer with the TURBOPUFFER_API_KEY secret, so it
+    # runs on pushes to main only, and skips with a warning when the secret
+    # isn't set. Pull requests from forks never see the secret.
     if: github.event_name == 'push'
     needs: test
     runs-on: ubuntu-latest
@@ -95,6 +96,9 @@ jobs:
     env:
       HAS_KEY: ${{ secrets.TURBOPUFFER_API_KEY != '' }}
     steps:
+      - name: Skip without the secret
+        if: env.HAS_KEY != 'true'
+        run: echo "::warning title=Live tests skipped::TURBOPUFFER_API_KEY isn't set, so the tests against turbopuffer didn't run."
       - uses: actions/checkout@v7
         if: env.HAS_KEY == 'true'
         with:

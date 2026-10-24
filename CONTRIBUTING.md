@@ -57,4 +57,4 @@ Every CI run uploads two artifacts: `dist` (the wheel, the sdist, and `SHA256SUM
 
 Before the first release, add a pending trusted publisher on both [PyPI](https://pypi.org/manage/account/publishing/) and [TestPyPI](https://test.pypi.org/manage/account/publishing/): project `tpuf-arrow`, owner `rickcrawford`, repository `tpuf-arrow`, workflow `release.yml`, and environment `pypi` or `testpypi`. In the GitHub repo settings, create the `pypi` environment with a required reviewer, so a tag can't publish without someone approving it.
 
-The live tests in CI need a `TURBOPUFFER_API_KEY` repository secret. Without it, the live job skips its steps.
+The live tests are optional in CI. They run on pushes to main when the repo has a `TURBOPUFFER_API_KEY` secret. Without one, the live job passes and leaves a warning on the run saying the tests were skipped.
