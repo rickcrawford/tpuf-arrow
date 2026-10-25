@@ -1,7 +1,7 @@
 [project]
 name = "tpuf-arrow"
 version = "0.1.0"
-description = "Unofficial: search turbopuffer from DuckDB SQL, through Arrow"
+description = "Query turbopuffer namespaces from DuckDB. Results come back as Arrow tables, and SQL functions run BM25 and vector search from inside a query. Unofficial."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -9,7 +9,10 @@ authors = [
     { name = "Rick Crawford" }
 ]
 requires-python = ">=3.12"
-keywords = ["duckdb", "turbopuffer", "vector search", "bm25", "arrow", "search evaluation"]
+keywords = [
+    "duckdb", "turbopuffer", "apache-arrow", "pyarrow", "python", "sql", "vector-search",
+    "full-text-search", "bm25", "hybrid-search", "reranking",
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
